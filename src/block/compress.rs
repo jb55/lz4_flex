@@ -585,7 +585,8 @@ fn init_dict<T: HashTable>(dict: &mut T, dict_data: &mut &[u8]) {
         *dict_data = &dict_data[dict_data.len() - WINDOW_SIZE..];
     }
     let mut i = 0usize;
-    while i + core::mem::size_of::<usize>() <= dict_data.len() {
+    // `get_hash_at` may read a u64, whatever the pointer width.
+    while i + core::mem::size_of::<u64>() <= dict_data.len() {
         let hash = T::get_hash_at(dict_data, i);
         dict.put_at(hash, i);
         // Note: The 3 byte step was copied from the reference implementation, it could be
@@ -964,6 +965,27 @@ mod tests {
             .unwrap();
             uncompressed.truncate(uncompressed_len);
             assert_eq!(uncompressed, input);
+        }
+    }
+
+    #[test]
+    fn compress_into_with_dict_on_the_large_table_does_not_read_past_dict() {
+        // dict + input >= 64 KiB takes `HashTable4K`, whose hash reads 8 bytes.
+        let input: Vec<u8> = (0..u16::MAX as usize).map(|i| (i % 251) as u8).collect();
+
+        for dict_len in (MINMATCH..=16).chain([100, WINDOW_SIZE + 5]) {
+            let dict: Vec<u8> = (0..dict_len).map(|i| (i % 13) as u8).collect();
+            let mut output = vec![0u8; get_maximum_output_size(input.len())];
+            let compressed_len = compress_into_with_dict(&input, &mut output, &dict).unwrap();
+
+            let mut uncompressed = vec![0u8; input.len()];
+            let uncompressed_len = crate::block::decompress::decompress_into_with_dict(
+                &output[..compressed_len],
+                &mut uncompressed,
+                &dict,
+            )
+            .unwrap();
+            assert_eq!(&uncompressed[..uncompressed_len], &input[..]);
         }
     }
 
